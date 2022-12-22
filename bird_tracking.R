@@ -6,13 +6,14 @@ library("readxl")
 library(tidyr)
 
 # get data of specific hen #
-setwd("//resstore.unibe.ch/vetsuisse_chicken_run/ToePecking_Amina")
-getwd()
+setwd("//resstore.unibe.ch/vetsuisse_chicken_run/ToePecking_Amina/Masha/22.10.22-09.12.22_RFID/")
+#setwd("//resstore.unibe.ch/vetsuisse_chicken_run/ToePecking_Amina/")
 # Loading the data
 
 # Get the list of .csv filenames under a given path
 filenames <- list.files(pattern = "\\.csv$", ignore.case=TRUE)
 
+#filename <-filenames
 # Load all the files into separate data.table tables
 filesData <- lapply(filenames, function(filename) {
   # To have any warnings printed out immediately
@@ -27,7 +28,8 @@ filesData <- lapply(filenames, function(filename) {
   
   # Regular expression pattern
   # Example string: "28.04.2021 16:43:12.66 DA760104 16400088 11"
-  pattern <- "^\\d{2}\\.\\d{2}\\.\\d{4} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,2})? [0-9A-F]{8} \\d{8} \\d{2}$"
+  pattern <- "^\\d{2}\\.\\d{2}\\.\\d{4} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,2})? [0-9A-F]{8} \\d{8} \\d{1,2}$"
+  #pattern <- "^\\d{2}\\.\\d{2}\\.\\d{4} \\d{2}:\\d{2}:\\d{2} [0-9A-F]{8} \\d{8} \\d{2}$"
   
   # Drop lines that don't match the pattern (as a result of a broken write)
   lines <- lines[grepl(pattern, lines)]
@@ -36,7 +38,7 @@ filesData <- lapply(filenames, function(filename) {
   text <- paste0(paste0(lines, collapse="\n"), "\n")
   
   # Parse as data.table
-  fread(text=text)
+  fread(text=text,fill=T)
 })
 
 
@@ -52,7 +54,8 @@ rm(filesData)
 
 str(data)
 head(data)
-
+#View(data)
+dim(data)
 
 ############## mapping options ##################
 henMapping <- c(
@@ -1872,6 +1875,8 @@ names(data)[3] <- "Hen"
 names(data)[4] <- "Antenna"
 names(data)[5] <- "Coil"
 sort(unique(data$Antenna))
+
+############# ANTENNA wide format #############
 # add antenna info
 antenna.ID <- read_excel("//nas-vetsuisse/VETSUISSE/Benutzer/yg18q990/Project_Toepecking/Antennas_Position.xlsx")
 head(antenna.ID)
@@ -1887,6 +1892,21 @@ antenna.ID.long$AntennaID <- as.numeric(antenna.ID.long$AntennaID)
 data.antenna <- merge(data,antenna.ID.long,by.x="Antenna",by.y ="AntennaID",all.x = T)
 head(data.antenna)
 sort(unique(data.antenna$side))
+############ ANTENNA long format###############
+antenna.ID <- read_excel("G:/VPHI/Welfare/2- Research Projects/Masha Marincek/Projects/Ca Timing/Antennas_Hobos/Antennas_Position.xlsx")
+head(antenna.ID)
+str(antenna.ID)
+antenna.ID$Pen <- as.factor(antenna.ID$Pen)
+sort(unique(antenna.ID$Pen))
+antenna.ID$side <- as.factor(antenna.ID$side)
+antenna.ID$left_right <- as.factor(antenna.ID$left_right)
+antenna.ID$Position <- as.factor(antenna.ID$Position)
+
+data.antenna <- merge(data,antenna.ID,by.x="Antenna",by.y ="Antenna_ID",all.x = T)
+head(data.antenna)
+sort(unique(data.antenna$side))
+length(sort(unique(data.antenna$Hen)))
+table(data.antenna$Pen,data.antenna$side)
 
 # add Pen Info and link to BirdID
 IDs <- read_excel("//nas-vetsuisse/VETSUISSE/Benutzer/yg18q990/Project_Toepecking/BirdID_Pen_ID.xlsx")
@@ -1897,6 +1917,7 @@ head(data.antenna)
 dim(IDs)
 dim(data.antenna)
 dim(data.full)
+head(IDs)
 
 data.full <- merge(data.antenna,IDs,by.x="Hen",by.y ="Serial_N")
 head(data.full)
@@ -1913,15 +1934,18 @@ sort(unique(data.full$clockTime))
 # filter by time interval:
 str(data.full)
 data.full$clockTime <- format(as.POSIXct(data.full$clockTime),"%H:%M:%S")
-table(data.antenna$Pen,data.antenna$side)
 
+table(data.antenna$Pen,data.antenna$side)
 data.filtered <-data.full[data.full$clockTime >= "15:30:00" & data.full$clockTime <= "17:30:00",]
 head(data.filtered,20)
 sort(unique(data.full$Date))
 sort(unique(data.full$side))
 
-Pen16_AKB <- subset(data.filtered, Pen=="16")
-table(data.antenna$Pen,data.antenna$side)
-#write.csv(Pen16_AKB,"Pen16_AKB.csv", row.names = FALSE)
-View(test)
+
+Pen15 <- subset(data.filtered, Pen=="15")
+Pen15.filtered <-Pen15[Pen15$Date >= "18.11.2022" & Pen15$Date <= "19.11.2022",]
+
+#write.csv(Pen15.filtered,"Pen15.filtered.csv", row.names = FALSE)
+#View(Pen15.filtered)
+table(Pen15.filtered$side,Pen15.filtered$Position)
 #######
