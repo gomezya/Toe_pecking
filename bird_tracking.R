@@ -1,19 +1,30 @@
+rm()
 # required libraries #
 library(data.table)
 library(dplyr)
 library(lubridate)
 library("readxl")
 library(tidyr)
+library(hms)
 
 # get data of specific hen #
 setwd("//resstore.unibe.ch/vetsuisse_chicken_run/ToePecking_Amina/Masha/22.10.22-09.12.22_RFID/")
+setwd("//resstore.unibe.ch/vetsuisse_chicken_run/ToePecking_Amina/Masha/")
+setwd("//resstore.unibe.ch/vetsuisse_chicken_run/ToePecking_Amina/Masha/Nov_and_Jan")
+setwd("//resstore.unibe.ch/vetsuisse_chicken_run/FATCAT/RFID/HA2_onwards_Amina/Testday") # just one testday to see if everything runs smoothly in R
+setwd("//resstore.unibe.ch/vetsuisse_chicken_run/FATCAT/RFID/HA2_onwards_Amina/") 
+# four weeks of mvt data (08.03. - 05.04.2023), not possible because all with RFID got killed for disections :-(
+setwd("//resstore.unibe.ch/vetsuisse_chicken_run/FATCAT/RFID/HA2_backwards_Amina/") 
+setwd("//resstore.unibe.ch/vetsuisse_chicken_run/FATCAT/RFID/HA2_backwards_Amina/Testday") # just one testday to see if everything runs smoothly in R
+
+path_to_files <- "//resstore.unibe.ch/vetsuisse_chicken_run/FATCAT/RFID/HA2_backwards_Amina/Testday"
+
 #setwd("//resstore.unibe.ch/vetsuisse_chicken_run/ToePecking_Amina/")
 # Loading the data
-
 # Get the list of .csv filenames under a given path
-filenames <- list.files(pattern = "\\.csv$", ignore.case=TRUE)
+filenames <- list.files(path = path_to_files, pattern = "\\.csv$", ignore.case=TRUE)
 
-#filename <-filenames
+#filename <-filenames[5]
 # Load all the files into separate data.table tables
 filesData <- lapply(filenames, function(filename) {
   # To have any warnings printed out immediately
@@ -22,7 +33,7 @@ filesData <- lapply(filenames, function(filename) {
   print(filename)
   
   # Read lines from file
-  con <- file(file.path(filename))
+  con <- file(file.path(path_to_files, filename))
   lines <- readLines(con)
   close(con)
   
@@ -48,14 +59,79 @@ memory.limit(size = 56000)
 
 data <- rbindlist(filesData)
 
-
 # Free up separate files' data
-rm(filesData)
-
 str(data)
 head(data)
 #View(data)
 dim(data)
+
+## Helper functions ####
+
+# Convert a timeline into an list of single-hen timelines
+# Parameter: a timeline
+# Output: a list of single-hen timelines
+
+splitHenData <- function(data) {
+  if (nrow(data)) {
+    hens <- unique(data[, Hen])
+    splitData <- list()
+    for (henID in hens) {
+      splitData <- append(splitData, list(data[Hen == henID]))
+    }
+  } else { # Data is empty - return a list with one empty dataframe
+    splitData <- list(data) 
+  }
+  return(splitData)
+}
+
+# Merge a list of timelines into a single timeline
+# Parameter: a list of timelines
+# Output: a single timeline
+mergeHenData <- function(henDataList) {
+  combined <- rbindlist(henDataList)
+  setkeyv(combined, c("Time", "Hen"))
+  setindex(combined, Hen)
+  return(combined)
+}
+
+# Apply a function to a timeline hen-wise
+# Parameters: a function to transform a single-hen timeline, a timeline
+# Output: a single transformed timeline
+applyPerHen <- function(f, data) {
+  mergeHenData(Map(f, splitHenData(data)))
+}
+
+# Remove consecutive Zone duplicates but also keep the last record
+# Does not change original data
+# Parameter: single-hen timeline
+# Output: a sparse timeline
+compactHenData <- function(henData) {
+  # See https://www.rdocumentation.org/packages/data.table/versions/1.14.0/topics/rleid
+  #   TRUE for first element in groups of repeated elements, FALSE otherwise
+  # henData[, .I == .N] is a "is it the last row" vector
+  henData[!duplicated(rleid(henData$Zone)) | henData[, .I == .N]] # Zone instead of Position
+}
+
+
+compactHenDataTier <- function(henData) {
+  # See https://www.rdocumentation.org/packages/data.table/versions/1.14.0/topics/rleid
+  #   TRUE for first element in groups of repeated elements, FALSE otherwise
+  # henData[, .I == .N] is a "is it the last row" vector
+  henData[!duplicated(rleid(henData$Position)) | henData[, .I == .N]]
+}
+
+# Add a Duration column to a timeline
+# Calculated for each row as the time difference to next row; 0 for the last row
+# Parameter: a single-hen timeline (ONLY single-hen timelines, otherwise values will be invalid!)
+# Output: a timeline with durations
+addDurations <- function(henData) {
+  newData <- copy(henData)
+  # Calculate duration of entry as difference to next entry
+  newData[, Duration := (shift(Time, type="lead") - Time)]
+  # Set duration for last entry as 0
+  newData[nrow(newData), Duration := as.difftime(0, units="secs")]
+  return(data.table(newData))
+}
 
 ############## mapping options ##################
 henMapping <- c(
@@ -1875,7 +1951,8 @@ names(data)[3] <- "Hen"
 names(data)[4] <- "Antenna"
 names(data)[5] <- "Coil"
 sort(unique(data$Antenna))
-
+data$Antenna <- as.numeric(data$Antenna)
+####
 ############# ANTENNA wide format #############
 # add antenna info
 antenna.ID <- read_excel("//nas-vetsuisse/VETSUISSE/Benutzer/yg18q990/Project_Toepecking/Antennas_Position.xlsx")
@@ -1893,7 +1970,9 @@ data.antenna <- merge(data,antenna.ID.long,by.x="Antenna",by.y ="AntennaID",all.
 head(data.antenna)
 sort(unique(data.antenna$side))
 ############ ANTENNA long format###############
-antenna.ID <- read_excel("G:/VPHI/Welfare/2- Research Projects/Masha Marincek/Projects/Ca Timing/Antennas_Hobos/Antennas_Position.xlsx")
+
+antenna.ID <- read_excel("//nas-vetsuisse/VETSUISSE/Gruppen/VPHI/Welfare/2- Research Projects/Masha Marincek/Projects/Ca Timing/Antennas_Hobos/Antennas_Position.xlsx")
+
 head(antenna.ID)
 str(antenna.ID)
 antenna.ID$Pen <- as.factor(antenna.ID$Pen)
@@ -1902,7 +1981,7 @@ antenna.ID$side <- as.factor(antenna.ID$side)
 antenna.ID$left_right <- as.factor(antenna.ID$left_right)
 antenna.ID$Position <- as.factor(antenna.ID$Position)
 
-data.antenna <- merge(data,antenna.ID,by.x="Antenna",by.y ="Antenna_ID",all.x = T)
+data.antenna <- merge(data,antenna.ID,by.x="Antenna",by.y ="Antenna_ID",all.x=TRUE,allow.cartesian=TRUE)
 head(data.antenna)
 sort(unique(data.antenna$side))
 length(sort(unique(data.antenna$Hen)))
@@ -1910,18 +1989,20 @@ table(data.antenna$Pen,data.antenna$side)
 
 # add Pen Info and link to BirdID
 IDs <- read_excel("//nas-vetsuisse/VETSUISSE/Benutzer/yg18q990/Project_Toepecking/BirdID_Pen_ID.xlsx")
+
 head(IDs)
 names(IDs)[2] <- "Pen_Bird"
 
 head(data.antenna)
 dim(IDs)
 dim(data.antenna)
-dim(data.full)
 head(IDs)
-
-data.full <- merge(data.antenna,IDs,by.x="Hen",by.y ="Serial_N")
+rm(data.full)
+data.full <- merge(data.antenna,IDs,by.x="Hen",by.y ="Serial_N",all.x=TRUE)
 head(data.full)
+str(data.full)
 sort(unique(data.full$side))
+sort(unique(data.full$Date))
 
 summary(data.full)
 
@@ -1931,21 +2012,279 @@ data.full[, clockTime := dmy_hms(paste(Date, Time))]
 str(data.full)
 sort(unique(data.full$clockTime))
 
-# filter by time interval:
+# set time as posix without milliseconds:
 str(data.full)
-data.full$clockTime <- format(as.POSIXct(data.full$clockTime),"%H:%M:%S")
+data.full$Time_posix <- as_hms(format(as.POSIXct(data.full$clockTime),"%H:%M:%S"))
 
-table(data.antenna$Pen,data.antenna$side)
-data.filtered <-data.full[data.full$clockTime >= "15:30:00" & data.full$clockTime <= "17:30:00",]
+# subset birds based on HA2 table:
+HA.df <- read_excel("//nas-vetsuisse/VETSUISSE/Benutzer/yg18q990/Project_Toepecking/HA2_Birdlist.xlsx")
+head(HA.df)
+str(HA.df)
+data.HA <- merge(HA.df,data.full,by.x=c("RFID"),by.y =c("Hen"),all.x=TRUE)
+
+head(data.HA)
+str(data.HA)
+sort(unique(data.HA$RFID))
+table(data.HA$Pen,data.HA$side)
+
+
+data.filtered <-data.full[data.full$clockTime >= "16:00:00" & data.full$clockTime <= "17:00:00",]
 head(data.filtered,20)
 sort(unique(data.full$Date))
 sort(unique(data.full$side))
 
+Pens <- subset(data.filtered, Pen=="13"|Pen=="15"|Pen=="16")
+Pens.filtered <-Pens[Pens$Date == "02.11.2022",]
+Pens.filtered <-Pens[Pens$Date >= "02.11.2022" & Pens$Date <= "02.11.2022",]
 
-Pen15 <- subset(data.filtered, Pen=="15")
-Pen15.filtered <-Pen15[Pen15$Date >= "18.11.2022" & Pen15$Date <= "19.11.2022",]
-
-#write.csv(Pen15.filtered,"Pen15.filtered.csv", row.names = FALSE)
+#write.csv(Pens.filtered,"Pens.filtered.csv", row.names = FALSE)
 #View(Pen15.filtered)
-table(Pen15.filtered$side,Pen15.filtered$Position)
+table(Pens.filtered$side,Pens.filtered$Position)
+
 #######
+
+####################################################
+#### Durations and transitions ####
+### extract durations and transitions on daily basis #
+summary(data.full)
+#allhens.active <- data.full
+head(allhens.active)
+str(allhens.active)
+####grouping and then getting durations per zone per day####
+
+data.HA$Hen <- as.factor(data.HA$RFID)
+data.HA$side <- as.factor(data.HA$side)
+data.HA$Position <- as.factor(data.HA$Position)
+data.HA$Pen <- as.factor(data.HA$Pen)
+str(data.HA)
+
+names(data.HA)[9] <- "time"
+names(data.HA)[18] <- "Time" #instead of clockTime
+#data.HA$Time <- dmy_hms(data.HA$Time)
+
+str(data.HA)
+
+#allhens.active$Time <- dmy_hms(allhens.active$Time)
+
+#data.HA$Time <- as.POSIXct(format(as.POSIXct(data.HA$clockTime),"%H:%M:%S"),format="%H:%M:%S")
+
+str(data.HA)
+str(data)
+
+# Parse datetime with lubridate - understands fractional seconds
+#allhens.active[, Time := dmy_hms(paste(Date, Time))]
+
+data <- as.data.table(data.HA)
+# Order by timestamp then hen
+data <- setkeyv(data, c("Hen", "Time"))
+# Round timestamps
+#data[, Time_posix := round_date(Time_posix, unit="secs")]
+
+data$Tierlevel <- data$Position
+unique(data$Tierlevel)
+library('stringr')
+levels(data$Tierlevel) <- list(Litter  = "Litter_center", Litter = "Litter_peripheral",Litter ="Pophole_inside", WG="Pophole_outside",Tier_1="Tier_1",Tier_3="Tier_3",Tier_4="Tier_4")
+
+# Remove non-transitions:
+# * Look at each hen's timeline individually (applyPerHen)
+# * Remove records that have the same zone as the previous one (except last one)
+sparseData <- applyPerHen(compactHenData, fullhen.toe)
+View(sparseData)
+###for Tier durations only###
+sparseData <- applyPerHen(compactHenDataTier, data)
+glimpse(data)
+View(sparseData.1)
+View(data)
+dim(sparseData)
+str(sparseData$Time)
+# Order by timestamp then hen
+sparseData.1 <- setkeyv(sparseData, c("Hen","Date","Time"))
+# Changing Alexs code and creating open matrix to store data
+
+allhens=data.frame(matrix(ncol=0, nrow=0))
+str(sparseData.1)
+hens <- unique(sparseData.1$Hen)
+
+henID <- hens[1]
+names(sparseData.1)[10] <- "Time"
+sparseData.1$Time <- sparseData.1$clockTime
+
+for (henID in hens) {
+  henData <- sparseData.1[Hen == henID]
+  henData$Time <- lubridate::hms(henData$Time)
+  henData$Time <- period_to_seconds(henData$Time) 
+  henData <- addDurations(henData)
+  print(henID)
+  
+  allhens=rbind(henData,allhens)
+}
+
+# there are minus durations du to overlap to the next date
+# therefore: deletion of minus durations
+allhens <- allhens[allhens$Duration>=0]
+plot(allhens$Duration)
+
+# get last row per hen and day as sleeptier information and add as an additional column
+sleepingtier <- allhens.active %>% 
+  group_by(Date, Hen) %>% 
+  arrange(Date, clocktime) %>%
+  slice(n())
+View(sleepingtier)
+names(sleepingtier)
+rm(test)
+
+str(allhens.active)
+View(allhens)
+sort(unique(allhens.active$Date))
+
+#### additional processing steps ####
+#Need to drop the last time point for extended breaks for each individual#
+#Creating a day variable to drop differences as well as easier to use later on#
+names(allhens)
+allhens$Date
+#allhens <- allhens.tierduration %>% mutate(dur1 = as.numeric(Duration))
+
+allhens.try <- allhens %>% 
+  mutate(time1 = yday(time))
+
+summary(allhens.try$time1)
+
+head(allhens.try)
+allhens.try <- allhens.try %>% 
+  group_by(Hen) %>% 
+  arrange(Time) %>% 
+  mutate(timediff = time1 - lead(time1))
+
+###Don't necessarily want to delete these times, so giving them an NA###
+
+
+allhens.try$dur1[allhens.try$timediff < -1] <-  "NA"
+
+str(allhens.try)
+
+allhens.try$dur1 <- as.numeric(allhens.try$dur1)
+
+summary(allhens.try$timediff)
+hist(allhens.try$dur1)
+
+####Don't want when chickens are sleeping so getting rid of overnight stays###
+
+allhens.active <- allhens.try %>% 
+  filter(timediff > -1) 
+
+summary(allhens.active$dur1)   
+hist(allhens.active$dur1)
+
+###Strange double date and need to get rid of###
+
+allhens.active <- allhens.active %>% 
+  mutate(henday = paste(Hen, Time, sep = "_"))
+
+allhens.active <- allhens.active %>% 
+  distinct(henday, .keep_all = TRUE)
+
+allhens.active <- allhens.active %>% 
+  group_by(Hen) %>% 
+  arrange(Time) %>% 
+  mutate(timediff = time1 - lead(time1))
+
+View(allhens.active)
+#### END additional processing steps ####
+
+####grouping and then getting durations per zone per day####
+
+allhens.active$dur1 <- as.numeric(allhens.active$dur1)
+allhens.active$Hen <- as.factor(allhens.active$Hen)
+allhens.active$Tierlevel <- as.factor(allhens.active$Tierlevel)
+library(tidyr)
+names(allhens)[11]<- "coil"
+names(allhens)[10]<-"numTime"
+head(allhens)
+allhens.tierduration <- allhens %>% 
+  group_by(Date, Pen_Bird, Hen, Tierlevel) %>%
+  #arrange(clocktime)%>%
+  mutate(tierduration = sum(Duration))
+View(allhens.tierduration)
+
+###Getting the number of transitions per hen per day###
+
+allhens.tierduration <- allhens.tierduration %>% 
+  group_by(Date, Pen_Bird, Hen)  %>% 
+  #arrange(Time) %>% 
+  mutate(total.transitions = n())
+
+summary(allhens.tierduration)
+View(allhens.tierduration)
+unique(allhens.tierduration$Hen)
+#####now we have all these durations and transitions, but we have duplicates and we need to get rid of them###
+
+allhens.tierduration <- allhens.tierduration %>% 
+  mutate(hendayzone = paste(Hen, Date, Tierlevel, sep = "_"))
+
+allhens.tierduration <- allhens.tierduration %>% 
+  mutate(henday1 = paste(Hen, Date, sep = "_"))
+
+allhens.tierduration <- allhens.tierduration %>% 
+  distinct(hendayzone, .keep_all = TRUE)
+View(allhens.tierduration)
+
+####Fill in 0s for hens that don't go to those zones###
+allhens.1 <- allhens.tierduration %>% select(Hen, Tierlevel, Duration, Date, clocktime, Pen)
+names(allhens.1)
+View(allhens.1)
+allhens.1 <- as.data.table(allhens.1)
+
+allhens.1$Tierlevel <- as.numeric(allhens.1$Tierlevel)
+allhens.1$Hen <- as.character(allhens.1$Hen)
+str(allhens.1)
+
+setkey(allhens.1, Hen, Date, Tierlevel)
+
+allhens.2 <- allhens.1[CJ(Hen = unique(Hen), Date = unique(Date), seq(min(Tierlevel), max(Tierlevel)))] 
+
+View(allhens.2)
+###########
+# if wanted add percentage of zone use per day
+# total duration from 02:00 until 17:00 ==> 15 hours == 54000 Sec 
+# but total dur seems to vary by hens: so I will go with maxdur = sum of all durs per bird per day
+
+names(allhens.tierduration)
+allhens.tierduration <- allhens.tierduration %>%
+  group_by(henday1)  %>% 
+  #arrange(Time) %>% 
+  mutate(maxdur = sum(tierduration))
+         
+names(allhens.tierduration)
+allhens.tierduration <- allhens.tierduration %>%
+  group_by(hendayzone)  %>% 
+  #arrange(Time) %>% 
+  mutate(tierprop = (tierduration/maxdur))
+
+# adding sleeping tier to the full dataset
+sleepingtier1 <- sleepingtier[,c("Hen","Date","Tierlevel")]
+names(sleepingtier1)[3] <- "sleeptier" # rename Tierlevel into sleeptier
+
+allhens.tierduration.sleep <- merge(allhens.tierduration,sleepingtier1,by.x=c("Hen","Date"),by.y =c("Hen","Date"),all.x = T)
+head(allhens.tierduration.sleep)
+
+# if transitions or sleeptier needed only: subset the tierduration table using the henday1 column
+
+allhens.transition <- allhens.tierduration %>% 
+  distinct(henday1, .keep_all = TRUE)
+
+allhens.transition <- allhens.transition %>% 
+  arrange(Hen)
+
+allhens.transition <- allhens.transition %>% 
+  select(Hen, Tierlevel, Date, total.transitions, Pen)
+
+names(allhens.transition)
+summary(allhens.transition)
+
+###save finished datasheet###
+
+allhens.tierduration <- apply(allhens.tierduration, 2, as.character)
+View(allhens.tierduration)
+write.table(allhens.tierduration, file = "allhens.tierduration.csv", sep = ",", col.names = NA, append = FALSE)
+allhens.tierduration <- read.csv("allhens.tierduration.csv")
+names(allhens.tierduration)
